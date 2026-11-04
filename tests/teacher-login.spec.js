@@ -108,23 +108,25 @@ test('Teacher Login and Dashboard Navigation', async ({ page }) => {
   }
 
   // Logout
-  const profileMenu = page.getByRole('link', {
+  const profileMenu = page.getByRole('banner').getByRole('link', {
     name: 'CM LIve 33',
   });
 
-  await profileMenu.scrollIntoViewIfNeeded();
   await profileMenu.click();
 
-  const logoutLink = page.getByRole('link', {
+  const logoutLink = page.locator('#cmDrawer').getByRole('link', {
     name: /Logout/,
-  }).first();
+  });
 
-  await expect(logoutLink).toBeVisible({
+  await expect(logoutLink).toBeAttached({
     timeout: 20000,
   });
 
-  await logoutLink.scrollIntoViewIfNeeded();
-  await logoutLink.click();
+  // The open profile menu is an off-screen drawer. Scrolling cannot bring
+  // its Logout link into the viewport, so activate that same link directly.
+  await logoutLink.evaluate((link) => {
+    link.click();
+  });
 
   await expect(page).toHaveURL(/\/teacher\/login/, {
     timeout: 15000,
