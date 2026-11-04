@@ -6,7 +6,7 @@ const pendingSessionsPopupText =
 const test = base.extend({
   page: async ({ page }, use) => {
     let handledCount = 0;
-    const maxAttempts = 5;
+    const maxAttempts = 15;
 
     // Locate the popup using its actual message.
     const popupMessage = page.getByText(
@@ -48,7 +48,7 @@ const test = base.extend({
         console.log('Pending sessions popup dismissed.');
       },
       {
-        times: maxAttempts,
+        times: maxAttempts + 1,
       }
     );
 
