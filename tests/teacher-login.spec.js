@@ -3,6 +3,23 @@ const {
   expect,
 } = require('./fixtures');
 
+function readNumericId(name) {
+  const value = process.env[name];
+
+  if (!value) {
+    return '';
+  }
+
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${name} must be a numeric id.`);
+  }
+
+  return value;
+}
+
+const batchId = readNumericId('BATCH_ID');
+const sessionId = readNumericId('SESSION_ID');
+
 test('Teacher Login and Dashboard Navigation', async ({ page }) => {
   test.setTimeout(180000);
 
@@ -85,9 +102,11 @@ test('Teacher Login and Dashboard Navigation', async ({ page }) => {
   }
 
   // STEP 11: Open the required course
-  const courseLink = page.getByRole('link', {
-    name: /Parent Toddler - 30 Sessions/,
-  }).first();
+  const courseLink = batchId
+    ? page.locator(`a[href$="/teacher/batch/${batchId}"]`).first()
+    : page.getByRole('link', {
+      name: /Parent Toddler - 30 Sessions/,
+    }).first();
 
   await expect(courseLink).toBeVisible({
     timeout: 15000,
@@ -96,6 +115,20 @@ test('Teacher Login and Dashboard Navigation', async ({ page }) => {
   await courseLink.click();
 
   console.log('Step 11: Course opened.');
+
+  if (sessionId) {
+    const sessionLink = page.locator(
+      `a[href$="/teacher/session/${sessionId}"]`
+    ).first();
+
+    await sessionLink.scrollIntoViewIfNeeded();
+
+    await expect(sessionLink).toBeVisible({
+      timeout: 15000,
+    });
+
+    console.log(`Session ${sessionId} is visible.`);
+  }
 
   // STEP 12: Handle popup if it appears.
   // The pending-sessions popup is dismissed by the fixture handler.
