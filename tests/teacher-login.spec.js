@@ -1,7 +1,6 @@
 const {
   test,
   expect,
-  navigateToPendingSessionsIfAvailable,
 } = require('./fixtures');
 
 test('Teacher Login and Dashboard Navigation', async ({ page }) => {
@@ -65,7 +64,6 @@ test('Teacher Login and Dashboard Navigation', async ({ page }) => {
   await batchesLink.click();
 
   console.log('Step 9: Batches opened successfully.');
-
 
   // STEP 10: Handle the OK popup if it appears.
   // The pending-sessions popup is dismissed by the fixture handler.
@@ -137,6 +135,4 @@ test('Teacher Login and Dashboard Navigation', async ({ page }) => {
   })).toBeVisible();
 
   console.log('Step 12: Teacher logged out successfully.');
-
 });
-  
