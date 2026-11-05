@@ -5,13 +5,13 @@ const { defineConfig, devices } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
 
-  // Global timeout: 3 minutes
-  timeout: 180000,
+  // Global timeout: 5 minutes for deep portal workflows
+  timeout: 300000,
 
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  retries: process.env.CI ? 1 : 0,
+  workers: 1,
 
   // HTML Report
   reporter: [
@@ -25,14 +25,10 @@ module.exports = defineConfig({
   use: {
     headless: false,
 
-    // Capture screenshots for every test
+    // Screenshots always; video/trace retained on failure for HTML report evidence
     screenshot: 'on',
-
-    // Record video for every test
-    video: 'on',
-
-    // Capture execution trace for every test
-    trace: 'on',
+    video: 'retain-on-failure',
+    trace: 'retain-on-failure',
 
     viewport: { width: 1366, height: 768 },
     actionTimeout: 30000,
