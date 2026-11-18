@@ -6,3 +6,11 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+/artifacts/
+
+# Jenkins / local generated summary
+/reports/execution-summary.txt
+
+# ALT audit evidence (keep reports/*.md/csv optionally tracked)
+/reports/alt-audit/screenshots/
+/reports/alt-audit/robots.txt.copy

@@ -23,12 +23,13 @@ module.exports = defineConfig({
   ],
 
   use: {
-    headless: false,
+    // Local interactive runs stay headed; Jenkins/CI forces headless.
+    headless: process.env.CI === 'true',
 
-    // Screenshots always; video/trace retained on failure for HTML report evidence
-    screenshot: 'on',
+    // Evidence for CI/local failures
+    screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    trace: 'retain-on-failure',
+    trace: 'on-first-retry',
 
     viewport: { width: 1366, height: 768 },
     actionTimeout: 30000,
@@ -40,7 +41,7 @@ module.exports = defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        headless: false,
+        headless: process.env.CI === 'true',
       },
     },
   ],
