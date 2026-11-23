@@ -103,7 +103,8 @@ pipeline {
             set BATCH_ID=%BATCH_ID%
             set SESSION_ID=%SESSION_ID%
             set PLAYWRIGHT_BROWSERS_PATH=C:\\Users\\DELL\\AppData\\Local\\ms-playwright
-            npx playwright test %TEST_PATH% --project=chromium --reporter=line,html
+            if not exist reports mkdir reports
+            npx playwright test %TEST_PATH% --project=chromium
           """
         }
       }
@@ -114,14 +115,41 @@ pipeline {
         bat '''
           @echo off
           if not exist reports mkdir reports
-          echo ClassMonitor Playwright Jenkins Report> reports\\execution-summary.txt
-          echo Build: %BUILD_NUMBER%>> reports\\execution-summary.txt
-          echo Branch: main>> reports\\execution-summary.txt
-          echo Commit: %GIT_COMMIT_SHORT%>> reports\\execution-summary.txt
-          echo BATCH_ID: %BATCH_ID%>> reports\\execution-summary.txt
-          echo SESSION_ID: %SESSION_ID%>> reports\\execution-summary.txt
-          echo See Jenkins build page for status, duration, failed tests and evidence.>> reports\\execution-summary.txt
+          set BUILD_NUMBER=%BUILD_NUMBER%
+          set GIT_COMMIT_SHORT=%GIT_COMMIT_SHORT%
+          set BATCH_ID=%BATCH_ID%
+          set SESSION_ID=%SESSION_ID%
+          node scripts\\ci-write-summary.js
         '''
+        script {
+          if (fileExists('reports/execution-summary.json')) {
+            def propsText = bat(
+              script: '''@echo off
+powershell -NoProfile -Command "$s=Get-Content -Raw reports\\execution-summary.json | ConvertFrom-Json; Write-Output (\\\"TEST_TOTAL=$($s.total)`nTEST_PASSED=$($s.passed)`nTEST_FAILED=$($s.failed)`nTEST_SKIPPED=$($s.skipped)`nTEST_DURATION_MS=$($s.durationMs)`nTEST_FAILURE_REASON=$($s.failureReason)`nTEST_INTERRUPTED=$($s.interrupted)\\")"
+''',
+              returnStdout: true
+            ).trim()
+            propsText.split('\\r?\\n').each { line ->
+              def idx = line.indexOf('=')
+              if (idx > 0) {
+                env."${line.substring(0, idx).trim()}" = line.substring(idx + 1).trim()
+              }
+            }
+            if (env.TEST_INTERRUPTED == 'True' || env.TEST_INTERRUPTED == 'true') {
+              echo "Interrupted or incomplete Playwright run detected."
+              currentBuild.result = 'FAILURE'
+            }
+          } else {
+            env.TEST_TOTAL = '0'
+            env.TEST_PASSED = '0'
+            env.TEST_FAILED = '0'
+            env.TEST_SKIPPED = '0'
+            env.TEST_DURATION_MS = '0'
+            env.TEST_FAILURE_REASON = 'execution-summary.json missing'
+            env.TEST_INTERRUPTED = 'true'
+            currentBuild.result = 'FAILURE'
+          }
+        }
       }
     }
 
@@ -133,6 +161,8 @@ pipeline {
           if exist playwright-report powershell -NoProfile -Command "Compress-Archive -Path playwright-report -DestinationPath artifacts\\playwright-report.zip -Force"
           if exist test-results powershell -NoProfile -Command "Compress-Archive -Path test-results -DestinationPath artifacts\\test-results.zip -Force"
           if exist reports\\execution-summary.txt copy /Y reports\\execution-summary.txt artifacts\\execution-summary.txt
+          if exist reports\\execution-summary.json copy /Y reports\\execution-summary.json artifacts\\execution-summary.json
+          if exist reports\\playwright-results.json copy /Y reports\\playwright-results.json artifacts\\playwright-results.json
         '''
       }
     }
@@ -140,50 +170,69 @@ pipeline {
 
   post {
     always {
-      archiveArtifacts artifacts: 'artifacts/**,playwright-report/**,test-results/**,reports/execution-summary.txt', allowEmptyArchive: true, fingerprint: true
+      archiveArtifacts artifacts: 'artifacts/**,playwright-report/**,test-results/**,reports/**', allowEmptyArchive: true, fingerprint: true
 
       script {
         try {
-          if (fileExists('playwright-report/index.html')) {
-            publishHTML(target: [
-              allowMissing: true,
-              alwaysLinkToLastBuild: true,
-              keepAll: true,
-              reportDir: 'playwright-report',
-              reportFiles: 'index.html',
-              reportName: 'Playwright HTML Report'
-            ])
-          }
+          publishHTML(target: [
+            allowMissing: true,
+            alwaysLinkToLastBuild: true,
+            keepAll: true,
+            reportDir: 'playwright-report',
+            reportFiles: 'index.html',
+            reportName: 'Playwright HTML Report'
+          ])
         } catch (err) {
           echo "HTML Publisher plugin missing or failed: ${err}"
         }
 
+        def emailStatus = currentBuild.currentResult ?: 'UNKNOWN'
+        def emailError = null
         try {
           emailext(
-            subject: "ClassMonitor Playwright - Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}",
+            subject: "ClassMonitor Playwright CI | Build #${env.BUILD_NUMBER} | ${emailStatus}",
             body: """
               <h2>ClassMonitor Playwright Automation</h2>
-              <p><b>Status:</b> ${currentBuild.currentResult}</p>
-              <p><b>Date/Time:</b> ${new Date()}</p>
-              <p><b>Build:</b> #${env.BUILD_NUMBER}</p>
-              <p><b>Branch:</b> main</p>
-              <p><b>Commit:</b> ${env.GIT_COMMIT_SHORT}</p>
+              <p><b>Project:</b> ClassMonitor Teacher Portal</p>
+              <p><b>Jenkins Job:</b> ${env.JOB_NAME}</p>
+              <p><b>Build Number:</b> #${env.BUILD_NUMBER}</p>
+              <p><b>Build Status:</b> ${emailStatus}</p>
+              <p><b>GitHub Branch:</b> main</p>
+              <p><b>Git Commit:</b> ${env.GIT_COMMIT_SHORT}</p>
+              <p><b>Total Tests:</b> ${env.TEST_TOTAL ?: 'n/a'}</p>
+              <p><b>Passed:</b> ${env.TEST_PASSED ?: 'n/a'}</p>
+              <p><b>Failed:</b> ${env.TEST_FAILED ?: 'n/a'}</p>
+              <p><b>Skipped:</b> ${env.TEST_SKIPPED ?: 'n/a'}</p>
+              <p><b>Duration:</b> ${currentBuild.durationString}</p>
               <p><b>BATCH_ID:</b> ${params.BATCH_ID}</p>
               <p><b>SESSION_ID:</b> ${params.SESSION_ID}</p>
-              <p><b>Duration:</b> ${currentBuild.durationString}</p>
+              <p><b>Failure Reason:</b> ${env.TEST_FAILURE_REASON ?: 'n/a'}</p>
+              <p><b>Interrupted:</b> ${env.TEST_INTERRUPTED ?: 'false'}</p>
               <p><b>Jenkins Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
               <p><b>HTML Report:</b> <a href="${env.BUILD_URL}Playwright_20HTML_20Report/">${env.BUILD_URL}Playwright_20HTML_20Report/</a></p>
               <p><b>Artifacts:</b> <a href="${env.BUILD_URL}artifact/">${env.BUILD_URL}artifact/</a></p>
-              <p>Open the build page for failed test names, console errors, screenshots, videos and traces.</p>
+              <p><b>Screenshots / Videos / Traces:</b> <a href="${env.BUILD_URL}artifact/test-results/">${env.BUILD_URL}artifact/test-results/</a></p>
+              <p><b>Test-results archive:</b> <a href="${env.BUILD_URL}artifact/artifacts/test-results.zip">${env.BUILD_URL}artifact/artifacts/test-results.zip</a></p>
+              <p><b>JSON Report:</b> <a href="${env.BUILD_URL}artifact/reports/playwright-results.json">${env.BUILD_URL}artifact/reports/playwright-results.json</a></p>
             """,
             mimeType: 'text/html',
             to: '${DEFAULT_RECIPIENTS}',
+            recipientProviders: [
+              [$class: 'RequesterRecipientProvider'],
+              [$class: 'CulpritsRecipientProvider']
+            ],
             attachLog: true,
             compressLog: true,
-            attachmentsPattern: 'artifacts/*.zip,artifacts/execution-summary.txt'
+            attachmentsPattern: 'artifacts/*.zip,artifacts/execution-summary.txt,artifacts/execution-summary.json'
           )
         } catch (err) {
+          emailError = err
           echo "Email not sent. Configure Extended E-mail Notification SMTP + Default Recipients in Jenkins UI: ${err}"
+        }
+
+        // Email problems must never overwrite the Playwright result.
+        if (emailError != null) {
+          echo "Email step failed but build result remains: ${currentBuild.currentResult}"
         }
 
         try {

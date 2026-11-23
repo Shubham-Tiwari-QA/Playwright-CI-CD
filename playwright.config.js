@@ -13,13 +13,16 @@ module.exports = defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
 
-  // HTML Report
+  // Keep reports even when the run fails so Jenkins can publish/archive them.
   reporter: [
     ['list'],
     ['html', {
       outputFolder: 'playwright-report',
-      open: 'never'
-    }]
+      open: 'never',
+    }],
+    ['json', {
+      outputFile: 'reports/playwright-results.json',
+    }],
   ],
 
   use: {
