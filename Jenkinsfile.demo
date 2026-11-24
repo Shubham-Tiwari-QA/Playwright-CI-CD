@@ -1,0 +1,186 @@
+pipeline {
+  agent {
+    node {
+      // Dedicated job workspace. Never use the local E:\\ClassMonitor-Automation folder.
+      customWorkspace 'C:/Jenkins/workspaces/ClassMonitor-Demo-CI'
+    }
+  }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    skipDefaultCheckout()
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
+    timeout(time: 45, unit: 'MINUTES')
+  }
+
+  // Local Jenkins: poll main every 2 minutes. No build when SCM is unchanged.
+  // Prefer a GitHub webhook instead when Jenkins is reachable from GitHub.
+  triggers {
+    pollSCM('H/2 * * * *')
+  }
+
+  environment {
+    CI = 'true'
+    DEMO_BASE_URL = 'https://stagelearn.classmonitor.com/demo'
+    NODE_OPTIONS = '--use-system-ca'
+    PLAYWRIGHT_BROWSERS_PATH = 'C:\\Users\\DELL\\AppData\\Local\\ms-playwright'
+    PLAYWRIGHT_HTML_REPORT = 'playwright-report-demo'
+    PLAYWRIGHT_JSON_OUTPUT = 'playwright-report-demo\\results.json'
+    PLAYWRIGHT_JUNIT_OUTPUT = 'playwright-report-demo\\junit.xml'
+    PLAYWRIGHT_OUTPUT_DIR = 'test-results-demo'
+    GIT_CONFIG_COUNT = '1'
+    GIT_CONFIG_KEY_0 = 'http.sslBackend'
+    GIT_CONFIG_VALUE_0 = 'schannel'
+  }
+
+  stages {
+    stage('Clean workspace') {
+      steps {
+        cleanWs(deleteDirs: true, notFailBuild: true)
+      }
+    }
+
+    stage('Checkout main') {
+      steps {
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: '*/main']],
+          extensions: [
+            [$class: 'CleanBeforeCheckout'],
+            [$class: 'CloneOption', shallow: false, noTags: false, timeout: 20]
+          ],
+          userRemoteConfigs: [[
+            url: 'https://github.com/Shubham-Tiwari-QA/Playwright-CI-CD.git'
+          ]]
+        ])
+      }
+    }
+
+    stage('Show Git revision') {
+      steps {
+        bat '''
+          @echo off
+          echo === Git branch ===
+          git branch --show-current
+          echo === Git commit ===
+          git rev-parse HEAD
+          git rev-parse --short HEAD
+          echo === Git log -1 ===
+          git log -1 --oneline
+        '''
+        script {
+          env.GIT_COMMIT_FULL = bat(
+            script: '@echo off && git rev-parse HEAD',
+            returnStdout: true
+          ).trim()
+          env.GIT_COMMIT_SHORT = bat(
+            script: '@echo off && git rev-parse --short HEAD',
+            returnStdout: true
+          ).trim()
+          env.GIT_BRANCH_NAME = bat(
+            script: '@echo off && git branch --show-current',
+            returnStdout: true
+          ).trim()
+          echo "Building branch=${env.GIT_BRANCH_NAME} commit=${env.GIT_COMMIT_SHORT} (${env.GIT_COMMIT_FULL})"
+        }
+      }
+    }
+
+    stage('Verify Node npm Git') {
+      steps {
+        bat '''
+          @echo off
+          echo === Node ===
+          where node
+          node -v
+          echo === npm ===
+          where npm
+          npm -v
+          echo === Git ===
+          where git
+          git --version
+          echo === Demo URL ===
+          echo %DEMO_BASE_URL%
+        '''
+      }
+    }
+
+    stage('Install dependencies') {
+      steps {
+        bat 'npm ci'
+      }
+    }
+
+    stage('Install Playwright Chromium') {
+      steps {
+        bat 'npx playwright install chromium'
+      }
+    }
+
+    stage('Run ClassMonitor Demo tests') {
+      steps {
+        bat '''
+          @echo off
+          set CI=true
+          set DEMO_BASE_URL=%DEMO_BASE_URL%
+          set PLAYWRIGHT_BROWSERS_PATH=%PLAYWRIGHT_BROWSERS_PATH%
+          set PLAYWRIGHT_HTML_REPORT=%PLAYWRIGHT_HTML_REPORT%
+          set PLAYWRIGHT_JSON_OUTPUT=%PLAYWRIGHT_JSON_OUTPUT%
+          set PLAYWRIGHT_JUNIT_OUTPUT=%PLAYWRIGHT_JUNIT_OUTPUT%
+          set PLAYWRIGHT_OUTPUT_DIR=%PLAYWRIGHT_OUTPUT_DIR%
+          npx playwright test tests/demo.e2e.spec.js tests/demo.validation.spec.js --project=chromium --workers=1
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      script {
+        writeFile file: 'reports/demo-execution-summary.txt', text: """ClassMonitor Demo CI
+Job: ClassMonitor-Demo-CI
+Build: ${env.BUILD_NUMBER}
+Branch: ${env.GIT_BRANCH_NAME}
+Commit: ${env.GIT_COMMIT_SHORT}
+FullCommit: ${env.GIT_COMMIT_FULL}
+DemoURL: ${env.DEMO_BASE_URL}
+Result: ${currentBuild.currentResult}
+"""
+      }
+
+      archiveArtifacts artifacts: 'playwright-report-demo/**,test-results-demo/**,reports/demo-execution-summary.txt', allowEmptyArchive: true, fingerprint: true
+
+      script {
+        try {
+          junit allowEmptyResults: true, testResults: 'playwright-report-demo/junit.xml'
+        } catch (err) {
+          echo "JUnit publisher missing or failed: ${err}"
+        }
+
+        try {
+          if (fileExists('playwright-report-demo/index.html')) {
+            publishHTML(target: [
+              allowMissing: true,
+              alwaysLinkToLastBuild: true,
+              keepAll: true,
+              reportDir: 'playwright-report-demo',
+              reportFiles: 'index.html',
+              reportName: 'ClassMonitor Demo HTML Report'
+            ])
+          }
+        } catch (err) {
+          echo "HTML Publisher missing or failed: ${err}"
+        }
+      }
+    }
+
+    success {
+      echo "ClassMonitor-Demo-CI SUCCESS — commit ${env.GIT_COMMIT_SHORT}"
+    }
+
+    failure {
+      echo "ClassMonitor-Demo-CI FAILURE — commit ${env.GIT_COMMIT_SHORT}. Open console + Demo HTML Report for screenshots, traces, and videos."
+    }
+  }
+}
