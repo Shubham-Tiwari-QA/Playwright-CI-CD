@@ -4,8 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "playwright test --project=chromium",
-    "test:ci": "playwright test --project=chromium --reporter=line,html"
+    "test": "playwright test tests/demo.e2e.spec.js tests/demo.validation.spec.js --project=chromium",
+    "test:headed": "playwright test tests/demo.e2e.spec.js tests/demo.validation.spec.js --project=chromium --headed",
+    "test:ci": "playwright test tests/demo.e2e.spec.js tests/demo.validation.spec.js --project=chromium",
+    "test:portal": "playwright test tests --project=chromium --grep-invert @demo",
+    "test:all": "playwright test --project=chromium",
+    "report": "playwright show-report"
   },
   "keywords": [],
   "author": "",
