@@ -1,34 +1,38 @@
-
 // @ts-check
+const path = require('path');
 const { defineConfig, devices } = require('@playwright/test');
+const { loadEnvFile } = require('./utils/helpers');
+
+loadEnvFile(path.join(__dirname, '.env'));
+
+const ci = process.env.CI === 'true' || process.env.npm_lifecycle_event === 'test:ci';
+const htmlReport = process.env.PLAYWRIGHT_HTML_REPORT || 'playwright-report';
 
 module.exports = defineConfig({
   testDir: './tests',
 
-  // Global timeout: 5 minutes for deep portal workflows
+  // Portal workflows need a long ceiling. Demo specs set a shorter timeout.
   timeout: 300000,
 
   fullyParallel: false,
-  forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  forbidOnly: !!ci,
+  retries: ci ? 1 : 0,
   workers: 1,
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || 'test-results',
 
-  // HTML Report
   reporter: [
     ['list'],
-    ['html', {
-      outputFolder: 'playwright-report',
-      open: 'never'
-    }]
+    ['html', { outputFolder: htmlReport, open: 'never' }],
+    ['json', { outputFile: process.env.PLAYWRIGHT_JSON_OUTPUT || path.join(htmlReport, 'results.json') }],
+    ['junit', { outputFile: process.env.PLAYWRIGHT_JUNIT_OUTPUT || path.join(htmlReport, 'junit.xml') }],
   ],
 
   use: {
-    headless: false,
+    headless: ci,
 
-    // Screenshots always; video/trace retained on failure for HTML report evidence
-    screenshot: 'on',
+    screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    trace: 'retain-on-failure',
+    trace: 'on-first-retry',
 
     viewport: { width: 1366, height: 768 },
     actionTimeout: 30000,
@@ -40,7 +44,7 @@ module.exports = defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        headless: false,
+        headless: ci,
       },
     },
   ],

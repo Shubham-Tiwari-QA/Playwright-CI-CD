@@ -2,7 +2,20 @@
 # Playwright
 node_modules/
 /test-results/
+/test-results-demo/
 /playwright-report/
+/playwright-report-demo/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+/artifacts/
+
+# Local secrets. Copy .env.example to .env.
+.env
+
+# Jenkins / local generated summary
+/reports/execution-summary.txt
+
+# ALT audit evidence (keep reports/*.md/csv optionally tracked)
+/reports/alt-audit/screenshots/
+/reports/alt-audit/robots.txt.copy
