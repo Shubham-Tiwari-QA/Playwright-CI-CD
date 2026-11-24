@@ -1,6 +1,8 @@
 pipeline {
   agent {
     node {
+      // Built-in Windows controller node. Required by Declarative `node` agent.
+      label 'built-in'
       // Dedicated job workspace. Never use the local E:\\ClassMonitor-Automation folder.
       customWorkspace 'C:/Jenkins/workspaces/ClassMonitor-Demo-CI'
     }
