@@ -8,18 +8,16 @@ pipeline {
     }
   }
 
+  // Schedule, SCM polling, and DEMO_EMAIL_TO are configured on the Jenkins job UI only
+  // (ClassMonitor-Demo-CI → Configure). Do not add triggers {} or parameters {} here
+  // or Declarative will overwrite the UI settings on the next build.
+
   options {
     timestamps()
     disableConcurrentBuilds()
     skipDefaultCheckout()
     buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
     timeout(time: 45, unit: 'MINUTES')
-  }
-
-  // Local Jenkins: poll main every 2 minutes. No build when SCM is unchanged.
-  // Prefer a GitHub webhook instead when Jenkins is reachable from GitHub.
-  triggers {
-    pollSCM('H/2 * * * *')
   }
 
   environment {
@@ -81,9 +79,12 @@ pipeline {
             returnStdout: true
           ).trim()
           env.GIT_BRANCH_NAME = bat(
-            script: '@echo off && git branch --show-current',
+            script: '@echo off && git rev-parse --abbrev-ref HEAD',
             returnStdout: true
           ).trim()
+          if (!env.GIT_BRANCH_NAME || env.GIT_BRANCH_NAME == 'HEAD') {
+            env.GIT_BRANCH_NAME = 'main'
+          }
           echo "Building branch=${env.GIT_BRANCH_NAME} commit=${env.GIT_COMMIT_SHORT} (${env.GIT_COMMIT_FULL})"
         }
       }
@@ -140,13 +141,71 @@ pipeline {
   post {
     always {
       script {
+        def stats = [
+          total  : 0,
+          passed : 0,
+          failed : 0,
+          skipped: 0,
+          percent: '0.00',
+          failedDetails: 'None'
+        ]
+
+        try {
+          if (fileExists('playwright-report-demo/results.json')) {
+            def parsed = parsePlaywrightStats(readFile('playwright-report-demo/results.json'))
+            stats.passed = parsed.passed
+            stats.failed = parsed.failed
+            stats.skipped = parsed.skipped
+            stats.total = parsed.total
+            stats.failedDetails = parsed.failedDetails
+          } else if (fileExists('playwright-report-demo/junit.xml')) {
+            def parsed = parseJUnitStats(readFile('playwright-report-demo/junit.xml'))
+            stats.passed = parsed.passed
+            stats.failed = parsed.failed
+            stats.skipped = parsed.skipped
+            stats.total = parsed.total
+          }
+        } catch (err) {
+          echo "Unable to parse Playwright report stats: ${err}"
+        }
+
+        if (stats.total > 0) {
+          stats.percent = String.format('%.2f', (stats.passed * 100.0) / stats.total)
+        }
+
+        env.DEMO_TOTAL = "${stats.total}"
+        env.DEMO_PASSED = "${stats.passed}"
+        env.DEMO_FAILED = "${stats.failed}"
+        env.DEMO_SKIPPED = "${stats.skipped}"
+        env.DEMO_PASS_PCT = stats.percent
+        env.DEMO_FAILED_DETAILS = stats.failedDetails
+
+        def istNow = new Date().format("yyyy-MM-dd HH:mm:ss 'IST'", TimeZone.getTimeZone('Asia/Kolkata'))
+        env.DEMO_IST_TIME = istNow
+
+        def durationMs = currentBuild.duration ?: 0
+        def seconds = (durationMs / 1000) as int
+        env.DEMO_DURATION = String.format('%dm %ds', (seconds / 60) as int, seconds % 60)
+
+        def cause = currentBuild.getBuildCauses()?.collect { it.shortDescription }?.join('; ')
+        env.DEMO_CAUSE = cause ?: 'Unknown'
+
         writeFile file: 'reports/demo-execution-summary.txt', text: """ClassMonitor Demo CI
 Job: ClassMonitor-Demo-CI
 Build: ${env.BUILD_NUMBER}
+Status: ${currentBuild.currentResult}
 Branch: ${env.GIT_BRANCH_NAME}
 Commit: ${env.GIT_COMMIT_SHORT}
 FullCommit: ${env.GIT_COMMIT_FULL}
 DemoURL: ${env.DEMO_BASE_URL}
+Total: ${env.DEMO_TOTAL}
+Passed: ${env.DEMO_PASSED}
+Failed: ${env.DEMO_FAILED}
+Skipped: ${env.DEMO_SKIPPED}
+PassPct: ${env.DEMO_PASS_PCT}
+Duration: ${env.DEMO_DURATION}
+WhenIST: ${env.DEMO_IST_TIME}
+Cause: ${env.DEMO_CAUSE}
 Result: ${currentBuild.currentResult}
 """
       }
@@ -174,6 +233,69 @@ Result: ${currentBuild.currentResult}
         } catch (err) {
           echo "HTML Publisher missing or failed: ${err}"
         }
+
+        // ZIP HTML report for email attachment (outside local Jenkins).
+        try {
+          if (fileExists('playwright-report-demo/index.html')) {
+            bat 'powershell -NoProfile -Command "Compress-Archive -Path playwright-report-demo\\* -DestinationPath playwright-report-demo.zip -Force"'
+            archiveArtifacts artifacts: 'playwright-report-demo.zip', allowEmptyArchive: true
+          }
+        } catch (err) {
+          echo "HTML report ZIP skipped: ${err}"
+        }
+      }
+
+      script {
+        // Email failures must not hide the Playwright result.
+        try {
+          // Recipient comes from the Jenkins job parameter (UI), never from Git.
+          def recipient = (params.DEMO_EMAIL_TO ?: env.DEMO_EMAIL_TO ?: '').trim()
+          if (!recipient) {
+            echo 'DEMO_EMAIL_TO is empty or SMTP recipient not set in job UI — skipping email notification (build result unchanged)'
+          } else {
+            def htmlReportUrl = "${env.BUILD_URL}ClassMonitor_20Demo_20HTML_20Report/"
+            def subject = "ClassMonitor-Demo-CI - Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}"
+            def body = """
+              <html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;">
+              <h2>ClassMonitor Demo CI</h2>
+              <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;">
+                <tr><td><b>Project</b></td><td>ClassMonitor-Demo-CI</td></tr>
+                <tr><td><b>Build Number</b></td><td>${env.BUILD_NUMBER}</td></tr>
+                <tr><td><b>Build Status</b></td><td>${currentBuild.currentResult}</td></tr>
+                <tr><td><b>Execution (IST)</b></td><td>${env.DEMO_IST_TIME}</td></tr>
+                <tr><td><b>Total Tests</b></td><td>${env.DEMO_TOTAL}</td></tr>
+                <tr><td><b>Passed</b></td><td>${env.DEMO_PASSED}</td></tr>
+                <tr><td><b>Failed</b></td><td>${env.DEMO_FAILED}</td></tr>
+                <tr><td><b>Skipped</b></td><td>${env.DEMO_SKIPPED}</td></tr>
+                <tr><td><b>Pass Percentage</b></td><td>${env.DEMO_PASS_PCT}%</td></tr>
+                <tr><td><b>Duration</b></td><td>${env.DEMO_DURATION}</td></tr>
+                <tr><td><b>Git Branch</b></td><td>${env.GIT_BRANCH_NAME}</td></tr>
+                <tr><td><b>Git Commit</b></td><td>${env.GIT_COMMIT_FULL ?: env.GIT_COMMIT_SHORT}</td></tr>
+                <tr><td><b>Trigger</b></td><td>${env.DEMO_CAUSE}</td></tr>
+                <tr><td><b>Build URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                <tr><td><b>HTML Report</b></td><td><a href="${htmlReportUrl}">${htmlReportUrl}</a></td></tr>
+              </table>
+              <h3>Failed test details</h3>
+              <p>${env.DEMO_FAILED_DETAILS}</p>
+              <p>HTML report ZIP is attached when available.</p>
+              </body></html>
+            """
+
+            emailext(
+              to: recipient,
+              subject: subject,
+              mimeType: 'text/html',
+              body: body,
+              attachmentsPattern: 'playwright-report-demo.zip',
+              attachLog: false
+            )
+            echo "Demo CI email notification sent to ${recipient}"
+            env.DEMO_EMAIL_SENT = 'true'
+          }
+        } catch (err) {
+          env.DEMO_EMAIL_SENT = 'false'
+          echo "EMAIL NOTIFICATION FAILED (automation result unchanged: ${currentBuild.currentResult}): ${err}"
+        }
       }
     }
 
@@ -183,6 +305,67 @@ Result: ${currentBuild.currentResult}
 
     failure {
       echo "ClassMonitor-Demo-CI FAILURE — commit ${env.GIT_COMMIT_SHORT}. Open console + Demo HTML Report for screenshots, traces, and videos."
+    }
+  }
+}
+
+@NonCPS
+def parsePlaywrightStats(String jsonText) {
+  def json = new groovy.json.JsonSlurperClassic().parseText(jsonText)
+  def expected = (json.stats?.expected ?: 0) as int
+  def unexpected = (json.stats?.unexpected ?: 0) as int
+  def flaky = (json.stats?.flaky ?: 0) as int
+  def skipped = (json.stats?.skipped ?: 0) as int
+  def failedNames = []
+  collectFailedTests(json.suites ?: [], failedNames)
+  return [
+    passed : expected,
+    failed : unexpected,
+    skipped: skipped,
+    total  : expected + unexpected + flaky + skipped,
+    failedDetails: failedNames ? failedNames.take(30).join('<br/>') : 'None'
+  ]
+}
+
+@NonCPS
+def parseJUnitStats(String junitText) {
+  def total = 0
+  def failed = 0
+  def skipped = 0
+  def testsMatcher = (junitText =~ /testsuite[^>]*tests="(\d+)"/)
+  def failMatcher = (junitText =~ /testsuite[^>]*failures="(\d+)"/)
+  def skipMatcher = (junitText =~ /testsuite[^>]*skipped="(\d+)"/)
+  if (testsMatcher.find()) {
+    total = testsMatcher.group(1) as int
+  }
+  if (failMatcher.find()) {
+    failed = failMatcher.group(1) as int
+  }
+  if (skipMatcher.find()) {
+    skipped = skipMatcher.group(1) as int
+  }
+  return [
+    passed : Math.max(total - failed - skipped, 0),
+    failed : failed,
+    skipped: skipped,
+    total  : total
+  ]
+}
+
+@NonCPS
+def collectFailedTests(suites, failedNames) {
+  suites.each { suite ->
+    (suite.specs ?: []).each { spec ->
+      (spec.tests ?: []).each { test ->
+        (test.results ?: []).each { result ->
+          if (result.status == 'unexpected' || result.status == 'failed') {
+            failedNames << "${spec.title ?: spec.file ?: 'test'} — ${result.status}"
+          }
+        }
+      }
+    }
+    if (suite.suites) {
+      collectFailedTests(suite.suites, failedNames)
     }
   }
 }
