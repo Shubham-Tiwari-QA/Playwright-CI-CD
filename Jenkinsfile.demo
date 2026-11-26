@@ -281,6 +281,9 @@ Result: ${currentBuild.currentResult}
               </body></html>
             """
 
+            // emailext throws on SMTP/transport failure. A non-throwing return only means
+            // the SMTP session completed without a Java exception — not that the inbox
+            // received the message (proxies/AV can ACK without delivering).
             emailext(
               to: recipient,
               subject: subject,
@@ -289,8 +292,8 @@ Result: ${currentBuild.currentResult}
               attachmentsPattern: 'playwright-report-demo.zip',
               attachLog: false
             )
-            echo "Demo CI email notification sent to ${recipient}"
-            env.DEMO_EMAIL_SENT = 'true'
+            echo "Demo CI email submitted via SMTP to ${recipient} (inbox delivery must be confirmed separately; check spam/quarantine if missing)"
+            env.DEMO_EMAIL_SENT = 'submitted'
           }
         } catch (err) {
           env.DEMO_EMAIL_SENT = 'false'
